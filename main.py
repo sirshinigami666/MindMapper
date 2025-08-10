@@ -66,9 +66,20 @@ try:
     cursor.execute(
         """CREATE TABLE IF NOT EXISTS subreddits (
             name TEXT PRIMARY KEY,
-            last_post INTEGER DEFAULT 0
+            last_post INTEGER DEFAULT 0,
+            sort_mode TEXT DEFAULT 'new'
         )"""
     )
+    
+    # Add sort_mode column to existing tables if it doesn't exist
+    try:
+        cursor.execute("ALTER TABLE subreddits ADD COLUMN sort_mode TEXT DEFAULT 'new'")
+        conn.commit()
+        logger.info("Added sort_mode column to existing database")
+    except Exception:
+        # Column already exists, ignore
+        pass
+    
     conn.commit()
     logger.info("Database initialized successfully")
 except Exception as e:
@@ -162,19 +173,31 @@ async def send_post(post):
 
 
 async def poll_subreddit(subreddit_name: str):
-    """Poll a subreddit for new posts"""
+    """Poll a subreddit for posts based on sort mode"""
     try:
-        cursor.execute("SELECT last_post FROM subreddits WHERE name=?", (subreddit_name,))
+        cursor.execute("SELECT last_post, sort_mode FROM subreddits WHERE name=?", (subreddit_name,))
         row = cursor.fetchone()
         last_post_time = row[0] if row else 0
+        sort_mode = row[1] if row and len(row) > 1 else 'new'
         
         subreddit = reddit.subreddit(subreddit_name)
-        new_posts = list(subreddit.new(limit=25))  # Get more posts to ensure we don't miss any
         
-        logger.info(f"Found {len(new_posts)} total posts in r/{subreddit_name}, last_post_time: {last_post_time}")
+        # Get posts based on sort mode
+        if sort_mode == 'hot':
+            posts = list(subreddit.hot(limit=25))
+        elif sort_mode == 'top':
+            posts = list(subreddit.top(time_filter='day', limit=25))
+        elif sort_mode == 'top_week':
+            posts = list(subreddit.top(time_filter='week', limit=25))
+        elif sort_mode == 'top_month':
+            posts = list(subreddit.top(time_filter='month', limit=25))
+        else:  # default to 'new'
+            posts = list(subreddit.new(limit=25))
+        
+        logger.info(f"Found {len(posts)} total posts in r/{subreddit_name} (sort: {sort_mode}), last_post_time: {last_post_time}")
         
         posts_to_send = []
-        for post in new_posts:
+        for post in posts:
             created = int(post.created_utc)
             if created > last_post_time:
                 posts_to_send.append(post)
@@ -234,22 +257,31 @@ async def cmd_start(message: types.Message):
     help_text = """
 🤖 <b>Reddit to Telegram Bot</b>
 
-This bot monitors Reddit subreddits and forwards new posts to this chat.
+This bot monitors Reddit subreddits and forwards posts to this chat.
 
 <b>Available Commands:</b>
 /start or /help - Show this help message
 /add &lt;subreddit&gt; - Subscribe to a subreddit
-/remove &lt;subreddit&gt; - Unsubscribe from a subreddit
+/sort &lt;subreddit&gt; &lt;mode&gt; - Change sorting mode
 /reset &lt;subreddit&gt; - Reset timestamp to get recent posts
+/remove &lt;subreddit&gt; - Unsubscribe from a subreddit
 /list - Show all subscribed subreddits
 
-<b>Example:</b>
-<code>/add python</code> - Subscribe to r/python
-<code>/reset python</code> - Get recent posts from r/python
-<code>/remove python</code> - Unsubscribe from r/python
+<b>Sorting Modes:</b>
+• new - Latest posts (default)
+• hot - Trending posts  
+• top - Top posts today
+• top_week - Top posts this week
+• top_month - Top posts this month
+
+<b>Examples:</b>
+<code>/add cats</code> - Subscribe to r/cats
+<code>/sort cats hot</code> - Get trending posts from r/cats
+<code>/sort cats top_week</code> - Get best posts this week
+<code>/remove cats</code> - Unsubscribe from r/cats
 
 <b>Note:</b> Only the bot admin can use these commands.
-The bot checks for new posts every 60 seconds.
+The bot checks for posts every 60 seconds.
 """
     await message.reply(help_text, parse_mode=ParseMode.HTML)
 
@@ -285,8 +317,8 @@ async def cmd_add(message: types.Message):
         # Add to database with older timestamp to get recent posts
         # Use a much older timestamp to ensure we get recent posts
         one_hour_ago = 1728000000  # Fixed timestamp from October 2024
-        cursor.execute("INSERT INTO subreddits(name, last_post) VALUES (?, ?)", 
-                      (subreddit_name, one_hour_ago))
+        cursor.execute("INSERT INTO subreddits(name, last_post, sort_mode) VALUES (?, ?, ?)", 
+                      (subreddit_name, one_hour_ago, 'new'))
         conn.commit()
         
         await message.reply(f"✅ Successfully subscribed to r/{subreddit_name}")
@@ -321,6 +353,44 @@ async def cmd_remove(message: types.Message):
         logger.info(f"Removed subscription to r/{subreddit_name}")
     else:
         await message.reply(f"ℹ️ Not subscribed to r/{subreddit_name}")
+
+
+@dp.message(Command("sort"))
+async def cmd_sort(message: types.Message):
+    """Set sorting mode for a subreddit"""
+    if message.from_user and message.from_user.id != ADMIN_ID:
+        await message.reply("❌ You are not authorized to use this command.")
+        return
+    
+    # Get arguments from the message text
+    args = message.text.split(' ', 2) if message.text else []
+    if len(args) < 3:
+        await message.reply("❌ Usage: <code>/sort subreddit_name mode</code>\n\n<b>Available modes:</b>\n• new - Latest posts\n• hot - Trending posts\n• top - Top posts today\n• top_week - Top posts this week\n• top_month - Top posts this month\n\nExample: <code>/sort python hot</code>", 
+                           parse_mode=ParseMode.HTML)
+        return
+    
+    subreddit_name = args[1].strip().lower()
+    sort_mode = args[2].strip().lower()
+    
+    valid_modes = ['new', 'hot', 'top', 'top_week', 'top_month']
+    if sort_mode not in valid_modes:
+        await message.reply(f"❌ Invalid sort mode. Available modes: {', '.join(valid_modes)}")
+        return
+    
+    # Check if subscribed
+    cursor.execute("SELECT name FROM subreddits WHERE name=?", (subreddit_name,))
+    if not cursor.fetchone():
+        await message.reply(f"ℹ️ Not subscribed to r/{subreddit_name}")
+        return
+    
+    # Update sort mode and reset timestamp to get posts with new sorting
+    one_hour_ago = 1728000000
+    cursor.execute("UPDATE subreddits SET sort_mode = ?, last_post = ? WHERE name = ?", 
+                   (sort_mode, one_hour_ago, subreddit_name))
+    conn.commit()
+    
+    await message.reply(f"✅ Set r/{subreddit_name} to sort by '{sort_mode}'. Will fetch posts with new sorting on next poll.")
+    logger.info(f"Set r/{subreddit_name} sort mode to {sort_mode}")
 
 
 @dp.message(Command("reset"))
@@ -362,7 +432,7 @@ async def cmd_list(message: types.Message):
         await message.reply("❌ You are not authorized to use this command.")
         return
     
-    cursor.execute("SELECT name FROM subreddits ORDER BY name")
+    cursor.execute("SELECT name, sort_mode FROM subreddits ORDER BY name")
     subs = cursor.fetchall()
     
     if not subs:
@@ -371,7 +441,10 @@ async def cmd_list(message: types.Message):
         return
     
     text = f"📋 <b>Subscribed Subreddits ({len(subs)}):</b>\n\n"
-    text += "\n".join(f"• r/{sub[0]}" for sub in subs)
+    for sub in subs:
+        name = sub[0]
+        sort_mode = sub[1] if len(sub) > 1 and sub[1] else 'new'
+        text += f"• r/{name} ({sort_mode})\n"
     
     await message.reply(text, parse_mode=ParseMode.HTML)
 
