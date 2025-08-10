@@ -2,6 +2,9 @@ import asyncio
 import logging
 import os
 import sqlite3
+import re
+import aiohttp
+import tempfile
 from datetime import datetime
 
 from aiogram import Bot, Dispatcher, types
@@ -87,6 +90,68 @@ except Exception as e:
     exit(1)
 
 
+async def get_redgifs_video_url(redgifs_url):
+    """Extract direct video URL from RedGifs link"""
+    try:
+        # Extract the gif ID from the RedGifs URL
+        match = re.search(r'redgifs\.com/watch/(\w+)', redgifs_url)
+        if not match:
+            return None
+        
+        gif_id = match.group(1)
+        
+        # RedGifs API endpoint to get video details
+        api_url = f"https://api.redgifs.com/v2/gifs/{gif_id}"
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.get(api_url) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    if 'gif' in data and 'urls' in data['gif']:
+                        # Try to get the HD video URL
+                        urls = data['gif']['urls']
+                        if 'hd' in urls:
+                            return urls['hd']
+                        elif 'sd' in urls:
+                            return urls['sd']
+                        elif 'mobile' in urls:
+                            return urls['mobile']
+    except Exception as e:
+        logger.error(f"Failed to get RedGifs video URL: {e}")
+    
+    return None
+
+
+async def download_and_send_video(video_url, caption, chat_id):
+    """Download and send video to Telegram"""
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(video_url) as response:
+                if response.status == 200:
+                    content_length = response.headers.get('Content-Length')
+                    if content_length and int(content_length) > 50 * 1024 * 1024:  # 50MB limit
+                        logger.warning(f"Video too large ({content_length} bytes), sending as link")
+                        return False
+                    
+                    # Create a temporary file
+                    with tempfile.NamedTemporaryFile(delete=False, suffix='.mp4') as temp_file:
+                        async for chunk in response.content.iter_chunked(8192):
+                            temp_file.write(chunk)
+                        temp_file_path = temp_file.name
+                    
+                    # Send the video
+                    video_input = types.FSInputFile(temp_file_path)
+                    await bot.send_video(chat_id, video_input, caption=caption, parse_mode=ParseMode.HTML)
+                    
+                    # Clean up temporary file
+                    os.unlink(temp_file_path)
+                    return True
+    except Exception as e:
+        logger.error(f"Failed to download and send video: {e}")
+    
+    return False
+
+
 async def send_post(post):
     """Send a Reddit post to the admin's Telegram chat"""
     chat_id = ADMIN_ID
@@ -135,6 +200,24 @@ async def send_post(post):
                 text += f"\n📹 <a href='{video_url}'>Direct Video Link</a>"
             
             await bot.send_message(chat_id, text, parse_mode=ParseMode.HTML)
+        elif 'redgifs.com' in url:
+            # RedGifs video post - attempt to download and send
+            logger.info(f"Processing RedGifs video: {url}")
+            video_url = await get_redgifs_video_url(url)
+            if video_url:
+                success = await download_and_send_video(video_url, text, chat_id)
+                if success:
+                    logger.info(f"Successfully sent RedGifs video: {post.title[:50]}...")
+                else:
+                    # Fallback to link if download fails
+                    logger.info(f"RedGifs download failed, sending as link: {url}")
+                    text += f"\n🔗 <a href='{url}'>RedGifs Video</a>"
+                    await bot.send_message(chat_id, text, parse_mode=ParseMode.HTML)
+            else:
+                # Fallback to link if URL extraction fails
+                logger.info(f"RedGifs URL extraction failed, sending as link: {url}")
+                text += f"\n🔗 <a href='{url}'>RedGifs Video</a>"
+                await bot.send_message(chat_id, text, parse_mode=ParseMode.HTML)
         elif hasattr(post, 'is_gallery') and post.is_gallery:
             # Gallery post
             logger.info(f"Sending as gallery post with {len(post.gallery_data['items'])} items")

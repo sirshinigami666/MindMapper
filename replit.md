@@ -10,6 +10,9 @@ This is a Reddit to Telegram Bot built in Python that monitors specified subredd
 ✓ **Updated README**: Added comprehensive setup instructions for Replit environment
 ✓ **Cleaned project structure**: Removed old attached files and consolidated to main.py
 ✓ **Environment template**: Created .env.template for local development setup
+✓ **Added sorting functionality**: Users can now choose between new, hot, top (daily/weekly/monthly) content modes
+✓ **RedGifs video download**: Bot now downloads and forwards RedGifs videos directly instead of just sending links
+✓ **Enhanced media handling**: Improved video processing with size limits and fallback mechanisms
 
 # User Preferences
 
