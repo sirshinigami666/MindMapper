@@ -100,14 +100,19 @@ async def send_post(post):
     text += f"🕒 {created}"
 
     try:
+        logger.info(f"Processing post: {post.title[:30]}... URL: {post.url} is_self: {post.is_self}")
+        
         if post.is_self:
             # Text post
+            logger.info("Sending as text post")
             await bot.send_message(chat_id, text, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
         elif any(post.url.endswith(ext) for ext in [".jpg", ".jpeg", ".png", ".gif", ".webp"]):
             # Image post
+            logger.info(f"Sending as image post: {post.url}")
             await bot.send_photo(chat_id, post.url, caption=text, parse_mode=ParseMode.HTML)
         elif "v.redd.it" in post.url or post.is_video:
             # Video post
+            logger.info(f"Sending as video post: {post.url}")
             video_url = None
             try:
                 if hasattr(post, 'media') and post.media and 'reddit_video' in post.media:
@@ -121,6 +126,7 @@ async def send_post(post):
             await bot.send_message(chat_id, text, parse_mode=ParseMode.HTML)
         elif hasattr(post, 'is_gallery') and post.is_gallery:
             # Gallery post
+            logger.info(f"Sending as gallery post with {len(post.gallery_data['items'])} items")
             try:
                 media_items = []
                 gallery_data = post.gallery_data
@@ -146,6 +152,7 @@ async def send_post(post):
                 await bot.send_message(chat_id, text, parse_mode=ParseMode.HTML)
         else:
             # Other content types (links, etc.)
+            logger.info(f"Sending as link post: {url}")
             text += f"\n🔗 <a href='{url}'>External Link</a>"
             await bot.send_message(chat_id, text, parse_mode=ParseMode.HTML)
         
@@ -275,8 +282,9 @@ async def cmd_add(message: types.Message):
         # This will raise an exception if subreddit doesn't exist
         subreddit.id
         
-        # Add to database with timestamp from 1 hour ago to get some recent posts
-        one_hour_ago = int(datetime.now().timestamp()) - 3600
+        # Add to database with older timestamp to get recent posts
+        # Use a much older timestamp to ensure we get recent posts
+        one_hour_ago = 1728000000  # Fixed timestamp from October 2024
         cursor.execute("INSERT INTO subreddits(name, last_post) VALUES (?, ?)", 
                       (subreddit_name, one_hour_ago))
         conn.commit()
@@ -338,7 +346,8 @@ async def cmd_reset(message: types.Message):
         return
     
     # Reset timestamp to 1 hour ago to get recent posts
-    one_hour_ago = int(datetime.now().timestamp()) - 3600
+    # Use a much older timestamp to ensure we get recent posts
+    one_hour_ago = 1728000000  # Fixed timestamp from October 2024
     cursor.execute("UPDATE subreddits SET last_post = ? WHERE name = ?", (one_hour_ago, subreddit_name))
     conn.commit()
     
