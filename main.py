@@ -164,11 +164,15 @@ async def poll_subreddit(subreddit_name: str):
         subreddit = reddit.subreddit(subreddit_name)
         new_posts = list(subreddit.new(limit=25))  # Get more posts to ensure we don't miss any
         
+        logger.info(f"Found {len(new_posts)} total posts in r/{subreddit_name}, last_post_time: {last_post_time}")
+        
         posts_to_send = []
         for post in new_posts:
             created = int(post.created_utc)
             if created > last_post_time:
                 posts_to_send.append(post)
+        
+        logger.info(f"Found {len(posts_to_send)} new posts to send from r/{subreddit_name}")
         
         if posts_to_send:
             # Sort by creation time (oldest first)
@@ -229,10 +233,12 @@ This bot monitors Reddit subreddits and forwards new posts to this chat.
 /start or /help - Show this help message
 /add &lt;subreddit&gt; - Subscribe to a subreddit
 /remove &lt;subreddit&gt; - Unsubscribe from a subreddit
+/reset &lt;subreddit&gt; - Reset timestamp to get recent posts
 /list - Show all subscribed subreddits
 
 <b>Example:</b>
 <code>/add python</code> - Subscribe to r/python
+<code>/reset python</code> - Get recent posts from r/python
 <code>/remove python</code> - Unsubscribe from r/python
 
 <b>Note:</b> Only the bot admin can use these commands.
@@ -269,9 +275,10 @@ async def cmd_add(message: types.Message):
         # This will raise an exception if subreddit doesn't exist
         subreddit.id
         
-        # Add to database
+        # Add to database with timestamp from 1 hour ago to get some recent posts
+        one_hour_ago = int(datetime.now().timestamp()) - 3600
         cursor.execute("INSERT INTO subreddits(name, last_post) VALUES (?, ?)", 
-                      (subreddit_name, int(datetime.now().timestamp())))
+                      (subreddit_name, one_hour_ago))
         conn.commit()
         
         await message.reply(f"✅ Successfully subscribed to r/{subreddit_name}")
@@ -306,6 +313,37 @@ async def cmd_remove(message: types.Message):
         logger.info(f"Removed subscription to r/{subreddit_name}")
     else:
         await message.reply(f"ℹ️ Not subscribed to r/{subreddit_name}")
+
+
+@dp.message(Command("reset"))
+async def cmd_reset(message: types.Message):
+    """Reset the last post timestamp for a subreddit to get recent posts"""
+    if message.from_user and message.from_user.id != ADMIN_ID:
+        await message.reply("❌ You are not authorized to use this command.")
+        return
+    
+    # Get arguments from the message text
+    args = message.text.split(' ', 1)[1].strip().lower() if message.text and len(message.text.split()) > 1 else ""
+    if not args:
+        await message.reply("❌ Usage: <code>/reset subreddit_name</code>\n\nExample: <code>/reset python</code>", 
+                           parse_mode=ParseMode.HTML)
+        return
+    
+    subreddit_name = args
+    
+    # Check if subscribed
+    cursor.execute("SELECT name FROM subreddits WHERE name=?", (subreddit_name,))
+    if not cursor.fetchone():
+        await message.reply(f"ℹ️ Not subscribed to r/{subreddit_name}")
+        return
+    
+    # Reset timestamp to 1 hour ago to get recent posts
+    one_hour_ago = int(datetime.now().timestamp()) - 3600
+    cursor.execute("UPDATE subreddits SET last_post = ? WHERE name = ?", (one_hour_ago, subreddit_name))
+    conn.commit()
+    
+    await message.reply(f"✅ Reset timestamp for r/{subreddit_name}. Will fetch posts from the last hour on next poll.")
+    logger.info(f"Reset timestamp for r/{subreddit_name} to {one_hour_ago}")
 
 
 @dp.message(Command("list"))
