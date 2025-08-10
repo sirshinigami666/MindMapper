@@ -76,7 +76,7 @@ except Exception as e:
     exit(1)
 
 
-async def send_post(post: praw.models.Submission):
+async def send_post(post):
     """Send a Reddit post to the admin's Telegram chat"""
     chat_id = ADMIN_ID
     title = post.title
@@ -244,12 +244,12 @@ The bot checks for new posts every 60 seconds.
 @dp.message(Command("add"))
 async def cmd_add(message: types.Message):
     """Handle /add command to subscribe to a subreddit"""
-    if message.from_user.id != ADMIN_ID:
+    if message.from_user and message.from_user.id != ADMIN_ID:
         await message.reply("❌ You are not authorized to use this command.")
         return
     
     # Get arguments from the message text
-    args = message.text.split(' ', 1)[1].strip().lower() if len(message.text.split()) > 1 else ""
+    args = message.text.split(' ', 1)[1].strip().lower() if message.text and len(message.text.split()) > 1 else ""
     if not args:
         await message.reply("❌ Usage: <code>/add subreddit_name</code>\n\nExample: <code>/add python</code>", 
                            parse_mode=ParseMode.HTML)
@@ -284,12 +284,12 @@ async def cmd_add(message: types.Message):
 @dp.message(Command("remove"))
 async def cmd_remove(message: types.Message):
     """Handle /remove command to unsubscribe from a subreddit"""
-    if message.from_user.id != ADMIN_ID:
+    if message.from_user and message.from_user.id != ADMIN_ID:
         await message.reply("❌ You are not authorized to use this command.")
         return
     
     # Get arguments from the message text
-    args = message.text.split(' ', 1)[1].strip().lower() if len(message.text.split()) > 1 else ""
+    args = message.text.split(' ', 1)[1].strip().lower() if message.text and len(message.text.split()) > 1 else ""
     if not args:
         await message.reply("❌ Usage: <code>/remove subreddit_name</code>\n\nExample: <code>/remove python</code>", 
                            parse_mode=ParseMode.HTML)
@@ -311,7 +311,7 @@ async def cmd_remove(message: types.Message):
 @dp.message(Command("list"))
 async def cmd_list(message: types.Message):
     """Handle /list command to show all subscribed subreddits"""
-    if message.from_user.id != ADMIN_ID:
+    if message.from_user and message.from_user.id != ADMIN_ID:
         await message.reply("❌ You are not authorized to use this command.")
         return
     
@@ -332,7 +332,7 @@ async def cmd_list(message: types.Message):
 @dp.message()
 async def handle_unknown(message: types.Message):
     """Handle unknown messages"""
-    if message.from_user.id == ADMIN_ID:
+    if message.from_user and message.from_user.id == ADMIN_ID:
         await message.reply("❓ Unknown command. Use /help to see available commands.")
 
 
